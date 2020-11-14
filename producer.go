@@ -213,8 +213,8 @@ func (w *Producer) MultiPublishAsync(topic string, body [][]byte, doneChan chan 
 
 // Publish synchronously publishes a message body to the specified topic, returning
 // an error if publish failed
-func (w *Producer) Publish(topic string, body []byte) error {
-	return w.sendCommand(Publish(topic, body))
+func (w *Producer) Publish(topic string, body []byte,  routingKey string) error {
+	return w.sendCommand(Publish(topic, body,routingKey))
 }
 
 // MultiPublish synchronously publishes a slice of message bodies to the specified topic, returning
@@ -303,7 +303,7 @@ func (w *Producer) connect() error {
 		return ErrNotConnected
 	}
 
-	w.log(LogLevelInfo, "(%s) connecting to nsqd", w.addr)
+	w.log(LogLevelInfo, "(%s) Producer connecting to nsqd", w.addr)
 
 	w.conn = NewConn(w.addr, &w.config, &producerConnDelegate{w})
 	w.conn.SetLoggerLevel(w.getLogLevel())
@@ -315,7 +315,7 @@ func (w *Producer) connect() error {
 	_, err := w.conn.Connect()
 	if err != nil {
 		w.conn.Close()
-		w.log(LogLevelError, "(%s) error connecting to nsqd - %s", w.addr, err)
+		w.log(LogLevelError, "(%s)Producer error connecting to nsqd - %s", w.addr, err)
 		return err
 	}
 	atomic.StoreInt32(&w.state, StateConnected)

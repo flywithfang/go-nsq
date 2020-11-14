@@ -128,8 +128,8 @@ func Ping() *Command {
 }
 
 // Publish creates a new Command to write a message to a given topic
-func Publish(topic string, body []byte) *Command {
-	var params = [][]byte{[]byte(topic)}
+func Publish(topic string, body []byte, routingKey string) *Command {
+	var params = [][]byte{[]byte(topic), []byte(routingKey)}
 	return &Command{[]byte("PUB"), params, body}
 }
 

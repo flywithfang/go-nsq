@@ -517,7 +517,7 @@ retry:
 	for _, addr := range nsqdAddrs {
 		err = r.ConnectToNSQD(addr)
 		if err != nil && err != ErrAlreadyConnected {
-			r.log(LogLevelError, "(%s) error connecting to nsqd - %s", addr, err)
+			r.log(LogLevelError, "(%s)Consumer error connecting to nsqd - %s", addr, err)
 			continue
 		}
 	}
@@ -572,7 +572,7 @@ func (r *Consumer) ConnectToNSQD(addr string) error {
 	}
 	r.mtx.Unlock()
 
-	r.log(LogLevelInfo, "(%s) connecting to nsqd", addr)
+	r.log(LogLevelInfo, "(%s)Consumer connecting to nsqd", addr)
 
 	cleanupConnection := func() {
 		r.mtx.Lock()
@@ -785,7 +785,7 @@ func (r *Consumer) onConnClose(c *Conn) {
 				}
 				err := r.ConnectToNSQD(addr)
 				if err != nil && err != ErrAlreadyConnected {
-					r.log(LogLevelError, "(%s) error connecting to nsqd - %s", addr, err)
+					r.log(LogLevelError, "(%s)Consumer error connecting to nsqd - %s", addr, err)
 					continue
 				}
 				break
