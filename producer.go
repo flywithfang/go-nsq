@@ -1,6 +1,8 @@
 package nsq
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -40,6 +42,7 @@ type Producer struct {
 
 	transactionChan chan *ProducerTransaction
 	transactions    []*ProducerTransaction
+	rpcMap          map[MessageID]*ProducerTransaction
 	state           int32
 
 	concurrentProducers int32
@@ -55,11 +58,15 @@ type Producer struct {
 type ProducerTransaction struct {
 	cmd      *Command
 	doneChan chan *ProducerTransaction
-	Error    error         // the error (or nil) of the publish command
+	Error    error // the error (or nil) of the publish command
+	result   []byte
 	Args     []interface{} // the slice of variadic arguments passed to PublishAsync or MultiPublishAsync
+	deadline time.Time
 }
 
-func (t *ProducerTransaction) finish() {
+func (t *ProducerTransaction) finish(err error, result []byte) {
+	t.Error = err
+	t.result = result
 	if t.doneChan != nil {
 		t.doneChan <- t
 	}
@@ -85,6 +92,7 @@ func NewProducer(addr string, config *Config) (*Producer, error) {
 		logLvl: LogLevelInfo,
 
 		transactionChan: make(chan *ProducerTransaction),
+		rpcMap:          make(map[MessageID]*ProducerTransaction),
 		exitChan:        make(chan int),
 		responseChan:    make(chan []byte),
 		errorChan:       make(chan []byte),
@@ -92,7 +100,7 @@ func NewProducer(addr string, config *Config) (*Producer, error) {
 
 	// Set default logger for all log levels
 	l := log.New(os.Stderr, "", log.Flags())
-	for index, _ := range p.logger {
+	for index := range p.logger {
 		p.logger[index] = l
 	}
 	return p, nil
@@ -214,7 +222,12 @@ func (w *Producer) MultiPublishAsync(topic string, body [][]byte, doneChan chan 
 // Publish synchronously publishes a message body to the specified topic, returning
 // an error if publish failed
 func (w *Producer) Publish(topic string, body []byte, routingKey string) error {
-	return w.sendCommand(Publish(topic, body, routingKey))
+	err, _ := w.sendCommand(Publish(topic, body, routingKey))
+	return err
+}
+func (w *Producer) Rpc(service string, body []byte, routingKey string) (result []byte, err error) {
+	err, r := w.sendCommand(Rpc(service, body, routingKey))
+	return r, err
 }
 
 // MultiPublish synchronously publishes a slice of message bodies to the specified topic, returning
@@ -224,14 +237,16 @@ func (w *Producer) MultiPublish(topic string, body [][]byte) error {
 	if err != nil {
 		return err
 	}
-	return w.sendCommand(cmd)
+	err2, _ := w.sendCommand(cmd)
+	return err2
 }
 
 // DeferredPublish synchronously publishes a message body to the specified topic
 // where the message will queue at the channel level until the timeout expires, returning
 // an error if publish failed
 func (w *Producer) DeferredPublish(topic string, delay time.Duration, body []byte) error {
-	return w.sendCommand(DeferredPublish(topic, delay, body))
+	err, _ := w.sendCommand(DeferredPublish(topic, delay, body))
+	return err
 }
 
 // DeferredPublishAsync publishes a message body to the specified topic
@@ -247,15 +262,15 @@ func (w *Producer) DeferredPublishAsync(topic string, delay time.Duration, body 
 	return w.sendCommandAsync(DeferredPublish(topic, delay, body), doneChan, args)
 }
 
-func (w *Producer) sendCommand(cmd *Command) error {
+func (w *Producer) sendCommand(cmd *Command) (error, []byte) {
 	doneChan := make(chan *ProducerTransaction)
 	err := w.sendCommandAsync(cmd, doneChan, nil)
 	if err != nil {
 		close(doneChan)
-		return err
+		return err, nil
 	}
 	t := <-doneChan
-	return t.Error
+	return t.Error, t.result
 }
 
 func (w *Producer) sendCommandAsync(cmd *Command, doneChan chan *ProducerTransaction,
@@ -276,6 +291,7 @@ func (w *Producer) sendCommandAsync(cmd *Command, doneChan chan *ProducerTransac
 		cmd:      cmd,
 		doneChan: doneChan,
 		Args:     args,
+		deadline: time.Now().Add(time.Second * 30),
 	}
 
 	select {
@@ -340,6 +356,7 @@ func (w *Producer) close() {
 }
 
 func (w *Producer) router() {
+	ticker := time.NewTicker(time.Second * 5)
 	for {
 		select {
 		case t := <-w.transactionChan:
@@ -350,13 +367,28 @@ func (w *Producer) router() {
 				w.close()
 			}
 		case data := <-w.responseChan:
-			w.popTransaction(FrameTypeResponse, data)
+			if bytes.Equal(data[:3], []byte("RES")) {
+				data = data[4:]
+				var id MessageID
+				copy(id[:], data[:MsgIDLength])
+				result := data[16:]
+				w.finishTransaction(id, nil, result)
+			} else if bytes.Equal(data, []byte("OK")) {
+				w.popTransaction(FrameTypeResponse, data, nil)
+			} else {
+				var id MessageID
+				copy(id[:], data)
+				w.popTransaction(FrameTypeResponse, nil, &id)
+			}
+
 		case data := <-w.errorChan:
-			w.popTransaction(FrameTypeError, data)
+			w.popTransaction(FrameTypeError, data, nil)
 		case <-w.closeChan:
 			goto exit
 		case <-w.exitChan:
 			goto exit
+		case <-ticker.C:
+			w.__logic()
 		}
 	}
 
@@ -365,21 +397,43 @@ exit:
 	w.wg.Done()
 	w.log(LogLevelInfo, "exiting router")
 }
+func (w *Producer) __logic() {
+	now := time.Now()
+	for id, t := range w.rpcMap {
+		if now.After(t.deadline) {
+			w.finishTransaction(id, errors.New("timeout"), nil)
+		}
+	}
+}
 
-func (w *Producer) popTransaction(frameType int32, data []byte) {
+func (w *Producer) popTransaction(frameType int32, data []byte, msg_id *MessageID) {
 	t := w.transactions[0]
 	w.transactions = w.transactions[1:]
 	if frameType == FrameTypeError {
-		t.Error = ErrProtocol{string(data)}
+		err := ErrProtocol{string(data)}
+		t.finish(err, nil)
+	} else if msg_id == nil {
+		t.finish(nil, nil)
+	} else {
+		w.rpcMap[*msg_id] = t
 	}
-	t.finish()
+
+}
+
+func (w *Producer) finishTransaction(msg_id MessageID, err error, result []byte) {
+	t, ok := w.rpcMap[msg_id]
+	if !ok {
+		return
+	}
+	delete(w.rpcMap, msg_id)
+	t.finish(err, result)
 }
 
 func (w *Producer) transactionCleanup() {
 	// clean up transactions we can easily account for
 	for _, t := range w.transactions {
-		t.Error = ErrNotConnected
-		t.finish()
+		err := ErrNotConnected
+		t.finish(err, nil)
 	}
 	w.transactions = w.transactions[:0]
 
@@ -389,8 +443,8 @@ func (w *Producer) transactionCleanup() {
 	for {
 		select {
 		case t := <-w.transactionChan:
-			t.Error = ErrNotConnected
-			t.finish()
+			err := ErrNotConnected
+			t.finish(err, nil)
 		default:
 			// keep spinning until there are 0 concurrent producers
 			if atomic.LoadInt32(&w.concurrentProducers) == 0 {

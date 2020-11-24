@@ -725,8 +725,8 @@ func (c *Conn) waitForCleanup() {
 	c.delegate.OnClose(c)
 }
 
-func (c *Conn) onMessageFinish(m *Message) {
-	c.msgResponseChan <- &msgResponse{msg: m, cmd: Finish(m.ID), success: true}
+func (c *Conn) onMessageFinish(m *Message, result []byte) {
+	c.msgResponseChan <- &msgResponse{msg: m, cmd: Finish(m.ID, result), success: true}
 }
 
 func (c *Conn) onMessageRequeue(m *Message, delay time.Duration, backoff bool) {

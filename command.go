@@ -132,6 +132,10 @@ func Publish(topic string, body []byte, routingKey string) *Command {
 	var params = [][]byte{[]byte(topic), []byte(routingKey)}
 	return &Command{[]byte("PUB"), params, body}
 }
+func Rpc(topic string, body []byte, routingKey string) *Command {
+	var params = [][]byte{[]byte(topic), []byte(routingKey), []byte("RPC")}
+	return &Command{[]byte("PUB"), params, body}
+}
 
 // DeferredPublish creates a new Command to write a message to a given topic
 // where the message will queue at the channel level until the timeout expires
@@ -186,9 +190,14 @@ func Ready(count int) *Command {
 
 // Finish creates a new Command to indiciate that
 // a given message (by id) has been processed successfully
-func Finish(id MessageID) *Command {
-	var params = [][]byte{id[:]}
-	return &Command{[]byte("FIN"), params, nil}
+func Finish(id MessageID, result []byte) *Command {
+	if result == nil {
+		var params = [][]byte{id[:]}
+		return &Command{[]byte("FIN"), params, nil}
+	} else {
+		var params = [][]byte{id[:], []byte("RES")}
+		return &Command{[]byte("FIN"), params, result}
+	}
 }
 
 // Requeue creates a new Command to indicate that

@@ -36,7 +36,7 @@ func (lvl LogLevel) String() string {
 type MessageDelegate interface {
 	// OnFinish is called when the Finish() method
 	// is triggered on the Message
-	OnFinish(*Message)
+	OnFinish(msg *Message, resp []byte)
 
 	// OnRequeue is called when the Requeue() method
 	// is triggered on the Message
@@ -51,7 +51,7 @@ type connMessageDelegate struct {
 	c *Conn
 }
 
-func (d *connMessageDelegate) OnFinish(m *Message) { d.c.onMessageFinish(m) }
+func (d *connMessageDelegate) OnFinish(m *Message, resp []byte) { d.c.onMessageFinish(m, resp) }
 func (d *connMessageDelegate) OnRequeue(m *Message, t time.Duration, b bool) {
 	d.c.onMessageRequeue(m, t, b)
 }

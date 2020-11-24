@@ -1135,7 +1135,7 @@ func (r *Consumer) handlerLoop(handler Handler) {
 		}
 
 		if r.shouldFailMessage(message, handler) {
-			message.Finish()
+			message.Finish([]byte("MaxAttempts"))
 			continue
 		}
 
@@ -1149,7 +1149,7 @@ func (r *Consumer) handlerLoop(handler Handler) {
 		}
 
 		if !message.IsAutoResponseDisabled() {
-			message.Finish()
+			message.Finish(nil)
 		}
 	}
 

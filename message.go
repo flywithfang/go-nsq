@@ -63,11 +63,11 @@ func (m *Message) HasResponded() bool {
 
 // Finish sends a FIN command to the nsqd which
 // sent this message
-func (m *Message) Finish() {
+func (m *Message) Finish(resp []byte) {
 	if !atomic.CompareAndSwapInt32(&m.responded, 0, 1) {
 		return
 	}
-	m.Delegate.OnFinish(m)
+	m.Delegate.OnFinish(m, resp)
 }
 
 // Touch sends a TOUCH command to the nsqd which
